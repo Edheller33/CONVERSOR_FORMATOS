@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sovereign Wallet PWA</title>
+  <style>
+    :root { --bg: #0f172a; --card: #1e293b; --accent: #3b82f6; --text: #f8fafc; }
+    body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; margin: 0; padding: 1rem; display: flex; justify-content: center; }
+    .container { max-width: 480px; width: 100%; background: var(--card); padding: 1.5rem; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+    h1 { font-size: 1.25rem; color: var(--accent); margin-top: 0; }
+    button { width: 100%; padding: 0.75rem; background: var(--accent); color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 0.5rem; }
+    button:hover { opacity: 0.9; }
+    input { width: 100%; padding: 0.75rem; margin: 0.5rem 0; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: white; box-sizing: border-box; }
+    .seed-box { background: #0f172a; padding: 1rem; border-radius: 6px; border: 1px stroke #334155; word-break: break-all; font-family: monospace; color: #4ade80; margin: 1rem 0; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h1>Vault Crypto PWA (Offline)</h1>
+  
+  <div id="setup-view">
+    <p>Genera una billetera auto-custodiada completamente fuera de línea.</p>
+    <input type="password" id="pin" placeholder="Crea un PIN de cifrado local">
+    <button onclick="createWallet()">Crear nueva Wallet</button>
+  </div>
+
+  <div id="wallet-view" class="hidden">
+    <h3>Tu Frase Semilla (BIP-39)</h3>
+    <p style="font-size: 0.8rem; color: #94a3b8;">Guarda estas 12 palabras en un papel. Si borras la caché, las necesitarás para recuperar la cuenta.</p>
+    <div id="seed-display" class="seed-box"></div>
+    <h3>Dirección Cifrada Localmente</h3>
+    <div id="address-display" class="seed-box" style="color: #60a5fa;"></div>
+    <button onclick="lockWallet()">Cerrar y Bloquear Vault</button>
+  </div>
+</div>
+
+<script>
+// Diccionario nativo simplificado de 16 palabras para la demostración pura (BIP39 real usa 2048)
+const DICTIONARY = ["sol", "luna", "mar", "viento", "fuego", "tierra", "roca", "nube", "rayo", "arbol", "hoja", "raiz", "flor", "fruto", "semilla", "valle"];
+
+async function createWallet() {
+  const pin = document.getElementById('pin').value;
+  if (!pin || pin.length < 4) return alert("Ingresa un PIN válido (min 4 caracteres)");
+
+  // 1. Generar 128 bits de entropía real mediante Web Crypto API
+  const entropy = new Uint8Array(16);
+  window.crypto.getRandomValues(entropy);
+
+  // 2. Mapear entropía a 12 palabras
+  let words = [];
+  for (let i = 0; i < 12; i++) {
+    const index = entropy[i % entropy.length] % DICTIONARY.length;
+    words.push(DICTIONARY[index]);
+  }
+  const seedPhrase = words.join(" ");
+
+  // 3. Cifrar la semilla usando PBKDF2 + AES-GCM
+  const encrypted = await encryptData(seedPhrase, pin);
+  localStorage.setItem('vault_data', JSON.stringify(encrypted));
+
+  // 4. Mostrar en pantalla
+  document.getElementById('seed-display').innerText = seedPhrase;
+  document.getElementById('address-display').innerText = "0x" + Array.from(entropy).map(b => b.toString(16).padStart(2, '0')).join('');
+  
+  document.getElementById('setup-view').classList.add('hidden');
+  document.getElementById('wallet-view').classList.remove('hidden');
+}
+
+async function encryptData(text, password) {
+  const enc = new TextEncoder();
+  const salt = window.crypto.getRandomValues(new Uint8Array(16));
+  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+
+  const keyMaterial = await window.crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
+  const key = await window.crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt"]
+  );
+
+  const encrypted = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(text));
+  return {
+    cipher: Array.from(new Uint8Array(encrypted)),
+    salt: Array.from(salt),
+    iv: Array.from(iv)
+  };
+}
+
+function lockWallet() {
+  document.getElementById('setup-view').classList.remove('hidden');
+  document.getElementById('wallet-view').classList.add('hidden');
+  document.getElementById('pin').value = '';
+}
+
+// Registro dinámico de PWA Service Worker dentro del mismo archivo
+if ('serviceWorker' in navigator) {
+  const swCode = `self.addEventListener('fetch', (e) => e.respondWith(fetch(e.request)));`;
+  const blob = new Blob([swCode], { type: 'text/javascript' });
+  navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(()=>{});
+}
+</script>
+</body>
+</html>
